@@ -23,6 +23,7 @@ import json
 import threading
 import tkinter as tk
 from tkinter import messagebox, ttk
+from typing import Optional
 from urllib.error import URLError, HTTPError
 from urllib.request import urlopen
 
@@ -38,7 +39,7 @@ class Esp32CamLedGui:
         self.root.minsize(430, 260)
 
         # None = состояние еще неизвестно, False = выключено, True = включено.
-        self.led_state: bool | None = None
+        self.led_state: Optional[bool] = None
 
         self.ip_var = tk.StringVar(value="192.168.1.100")
         self.status_var = tk.StringVar(value="Введите IP ESP32-CAM и нажмите 'Проверить'.")
@@ -84,7 +85,7 @@ class Esp32CamLedGui:
 
         footer = ttk.Label(
             main,
-            text="Подсказка: IP смотрим в Arduino IDE → Serial Monitor, скорость 115200.",
+            text="Подсказка: IP смотрим в Arduino IDE -> Serial Monitor, скорость 115200.",
             wraplength=390,
         )
         footer.pack(anchor="w", pady=(12, 0))
@@ -111,13 +112,16 @@ class Esp32CamLedGui:
             try:
                 result = task()
             except ValueError as exc:
-                self.root.after(0, lambda: self._show_error(str(exc)))
+                message = str(exc)
+                self.root.after(0, lambda msg=message: self._show_error(msg))
             except (URLError, HTTPError, TimeoutError, json.JSONDecodeError) as exc:
-                self.root.after(0, lambda: self._show_error(f"Нет связи с ESP32-CAM: {exc}"))
+                message = f"Нет связи с ESP32-CAM: {exc}"
+                self.root.after(0, lambda msg=message: self._show_error(msg))
             except Exception as exc:  # Защита GUI от неожиданного падения.
-                self.root.after(0, lambda: self._show_error(f"Ошибка: {exc}"))
+                message = f"Ошибка: {exc}"
+                self.root.after(0, lambda msg=message: self._show_error(msg))
             else:
-                self.root.after(0, lambda: on_success(result))
+                self.root.after(0, lambda res=result: on_success(res))
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -167,7 +171,7 @@ class Esp32CamLedGui:
 
 def main() -> None:
     root = tk.Tk()
-    app = Esp32CamLedGui(root)
+    Esp32CamLedGui(root)
     root.mainloop()
 
 
