@@ -6,3 +6,4 @@
 
 - [`Blink_Flash_LED_GPIO4`](Blink_Flash_LED_GPIO4/Blink_Flash_LED_GPIO4.ino) — простая проверка встроенного светодиода-вспышки ESP32-CAM на GPIO 4: включение на 2 секунды, выключение на 2 секунды.
 - [`LED_HTTP_Toggle_Windows_GUI`](LED_HTTP_Toggle_Windows_GUI/) — ESP32-CAM HTTP-сервер и Windows GUI с залипающей кнопкой: одно нажатие включает LED GPIO4, следующее выключает.
+- [`LED_UART_Toggle_Windows_GUI`](LED_UART_Toggle_Windows_GUI/) — ESP32-CAM UART/Serial управление LED GPIO4 через COM-порт и Windows GUI с залипающей кнопкой.
