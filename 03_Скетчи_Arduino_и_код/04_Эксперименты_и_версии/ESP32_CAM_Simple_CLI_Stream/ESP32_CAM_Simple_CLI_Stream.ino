@@ -1,6 +1,7 @@
 #include "esp_camera.h"
 #include <WiFi.h>
 #include <Preferences.h>
+#include <ESPmDNS.h>
 #include "img_converters.h"
 #include "Arduino.h"
 #include "soc/soc.h"
@@ -26,6 +27,7 @@
 #define HREF_GPIO_NUM     23
 #define PCLK_GPIO_NUM     22
 
+const char* MDNS_NAME = "esp32cam";
 const uint32_t WIFI_TIMEOUT_MS = 30000;
 static const char* STREAM_CONTENT_TYPE = "multipart/x-mixed-replace;boundary=" PART_BOUNDARY;
 static const char* STREAM_BOUNDARY = "\r\n--" PART_BOUNDARY "\r\n";
@@ -73,6 +75,7 @@ void printHelp() {
   Serial.println("  SSID;PASS");
   Serial.println("Commands: HELP, SHOW, RESET");
   Serial.println("Line ending: Newline or Both NL & CR");
+  Serial.println("After connection open IP URL or http://esp32cam.local/");
 }
 
 void printStatus() {
@@ -90,6 +93,9 @@ void printStatus() {
     Serial.println(WiFi.SSID());
     Serial.print("IP: ");
     Serial.println(WiFi.localIP());
+    Serial.print("mDNS: http://");
+    Serial.print(MDNS_NAME);
+    Serial.println(".local/");
   }
 }
 
@@ -225,6 +231,18 @@ bool setupWiFiCli() {
   }
 }
 
+bool startMDNS() {
+  if (MDNS.begin(MDNS_NAME)) {
+    MDNS.addService("http", "tcp", 80);
+    Serial.print("mDNS ready: http://");
+    Serial.print(MDNS_NAME);
+    Serial.println(".local/");
+    return true;
+  }
+  Serial.println("mDNS start failed. Use numeric IP address.");
+  return false;
+}
+
 static esp_err_t stream_handler(httpd_req_t *req) {
   camera_fb_t *fb = NULL;
   esp_err_t res = ESP_OK;
@@ -342,8 +360,14 @@ void setup() {
   if (!initCamera()) return;
   setupWiFiCli();
 
+  startMDNS();
+
   Serial.print("Camera Stream Ready! Go to: http://");
   Serial.println(WiFi.localIP());
+  Serial.print("mDNS URL: http://");
+  Serial.print(MDNS_NAME);
+  Serial.println(".local/");
+
   startCameraServer();
 }
 
