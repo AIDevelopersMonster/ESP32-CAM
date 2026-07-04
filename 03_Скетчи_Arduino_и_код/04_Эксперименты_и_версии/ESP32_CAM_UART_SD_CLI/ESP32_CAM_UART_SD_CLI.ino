@@ -21,11 +21,17 @@
 #define HREF_GPIO_NUM     23
 #define PCLK_GPIO_NUM     22
 
+const int FLASH_LED_GPIO = 4;
 const bool SD_1BIT_MODE = true;
 const uint32_t SERIAL_BAUD = 115200;
 
 bool sdMounted = false;
 bool cameraReady = false;
+
+void flashLedOff() {
+  pinMode(FLASH_LED_GPIO, OUTPUT);
+  digitalWrite(FLASH_LED_GPIO, LOW);
+}
 
 void eventLine(const String& payload) {
   Serial.print("SDCLI:");
@@ -100,12 +106,15 @@ bool mountSD() {
   }
 
   Serial.println("Mounting SD card in 1-bit SD_MMC mode...");
+  flashLedOff();
   if (!SD_MMC.begin("/sdcard", SD_1BIT_MODE)) {
+    flashLedOff();
     Serial.println("SD_MMC mount failed");
     eventLine("ERROR;CMD=MOUNT;CODE=MOUNT_FAILED");
     sdMounted = false;
     return false;
   }
+  flashLedOff();
 
   uint8_t type = SD_MMC.cardType();
   if (type == CARD_NONE) {
@@ -184,16 +193,17 @@ void listDir(String path) {
   File file = root.openNextFile();
   while (file) {
     String name = String(file.name());
+    String itemPath = normalizePath(name);
     if (file.isDirectory()) {
       Serial.print("DIR  ");
       Serial.println(name);
-      eventLine(String("ITEM;TYPE=DIR;PATH=") + name);
+      eventLine(String("ITEM;TYPE=DIR;PATH=") + itemPath);
     } else {
       Serial.print("FILE ");
       Serial.print(name);
       Serial.print(" SIZE=");
       Serial.println(file.size());
-      eventLine(String("ITEM;TYPE=FILE;PATH=") + name + ";SIZE=" + file.size());
+      eventLine(String("ITEM;TYPE=FILE;PATH=") + itemPath + ";SIZE=" + file.size());
     }
     file.close();
     file = root.openNextFile();
@@ -335,6 +345,7 @@ bool initCamera() {
   }
 
   esp_err_t err = esp_camera_init(&config);
+  flashLedOff();
   if (err != ESP_OK) {
     Serial.printf("Camera init failed with error 0x%x\n", err);
     eventLine(String("ERROR;CMD=CAMERA;CODE=INIT_FAILED;ESP_ERR=0x") + String((uint32_t)err, HEX));
@@ -363,6 +374,7 @@ void captureToSD(String path) {
   path = normalizePath(path);
 
   camera_fb_t *fb = esp_camera_fb_get();
+  flashLedOff();
   if (!fb) {
     Serial.println("Camera capture failed");
     eventLine(String("ERROR;CMD=CAPTURE;CODE=CAPTURE_FAILED;PATH=") + path);
@@ -374,12 +386,14 @@ void captureToSD(String path) {
     Serial.println("Failed to open file for captured image");
     eventLine(String("ERROR;CMD=CAPTURE;CODE=OPEN_FAILED;PATH=") + path);
     esp_camera_fb_return(fb);
+    flashLedOff();
     return;
   }
 
   size_t written = file.write(fb->buf, fb->len);
   file.close();
   esp_camera_fb_return(fb);
+  flashLedOff();
 
   Serial.print("Captured image saved: ");
   Serial.print(path);
@@ -413,22 +427,27 @@ void handleCommand(String line) {
 
 void setup() {
   WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0);
+  flashLedOff();
   Serial.begin(SERIAL_BAUD);
   Serial.setDebugOutput(false);
   Serial.setTimeout(30000);
   delay(1000);
+  flashLedOff();
 
   Serial.println();
   Serial.println("ESP32-CAM UART SD CLI");
   eventLine("BOOT;NAME=ESP32-CAM_UART_SD_CLI;BAUD=115200");
 
   initCamera();
+  flashLedOff();
   mountSD();
+  flashLedOff();
   printHelp();
   printStatus();
 }
 
 void loop() {
+  flashLedOff();
   if (Serial.available()) {
     String line = Serial.readStringUntil('\n');
     handleCommand(line);
