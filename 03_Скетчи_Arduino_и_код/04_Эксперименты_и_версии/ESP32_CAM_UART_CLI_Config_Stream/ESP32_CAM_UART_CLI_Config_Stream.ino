@@ -53,6 +53,28 @@ String streamUrl() {
   return String("http://") + WiFi.localIP().toString() + String("/stream");
 }
 
+String mdnsUrl() {
+  return String("http://") + MDNS_NAME + String(".local/");
+}
+
+void guiEvent(const String& payload) {
+  Serial.print("GUI:");
+  Serial.println(payload);
+}
+
+String wifiStatusName(wl_status_t status) {
+  switch (status) {
+    case WL_IDLE_STATUS: return "IDLE";
+    case WL_NO_SSID_AVAIL: return "NO_SSID";
+    case WL_SCAN_COMPLETED: return "SCAN_COMPLETED";
+    case WL_CONNECTED: return "CONNECTED";
+    case WL_CONNECT_FAILED: return "CONNECT_FAILED";
+    case WL_CONNECTION_LOST: return "CONNECTION_LOST";
+    case WL_DISCONNECTED: return "DISCONNECTED";
+    default: return String((int)status);
+  }
+}
+
 void printCliHelp() {
   Serial.println();
   Serial.println("=== ESP32-CAM UART CLI WiFi config ===");
@@ -65,7 +87,12 @@ void printCliHelp() {
   Serial.println("  SHOW   - show saved SSID");
   Serial.println("  HELP   - show this help");
   Serial.println();
+  Serial.println("GUI programs should parse only lines starting with GUI:");
+  Serial.println("  GUI:READY;FORMAT=SSID;PASSWORD");
+  Serial.println("  GUI:OK;IP=192.168.1.55;URL=http://192.168.1.55/;STREAM=http://192.168.1.55/stream");
+  Serial.println();
   Serial.println("Set Serial Monitor line ending to Newline or Both NL & CR.");
+  guiEvent("READY;FORMAT=SSID;PASSWORD;BAUD=115200");
 }
 
 String maskPassword(const String& pass) {
@@ -88,6 +115,7 @@ void saveWiFiSettings(const String& ssid, const String& pass) {
   prefs.end();
   savedSsid = ssid;
   savedPass = pass;
+  guiEvent(String("SAVED;SSID=") + ssid);
 }
 
 void clearWiFiSettings() {
@@ -96,6 +124,7 @@ void clearWiFiSettings() {
   prefs.end();
   savedSsid = "";
   savedPass = "";
+  guiEvent("CLEARED");
 }
 
 bool parseCredentialsLine(const String& line, String& ssidOut, String& passOut) {
@@ -112,10 +141,12 @@ bool parseCredentialsLine(const String& line, String& ssidOut, String& passOut) 
   if (ssidOut.length() == 0) return false;
   if (ssidOut.length() > 32) {
     Serial.println("SSID is too long. Maximum is 32 characters.");
+    guiEvent("ERROR;CODE=SSID_TOO_LONG;MAX=32");
     return false;
   }
   if (passOut.length() > 64) {
     Serial.println("Password is too long. Maximum is 64 characters.");
+    guiEvent("ERROR;CODE=PASSWORD_TOO_LONG;MAX=64");
     return false;
   }
   return true;
@@ -130,6 +161,7 @@ bool connectToWiFi(const String& ssid, const String& pass) {
 
   Serial.print("Connecting to WiFi: ");
   Serial.println(ssid);
+  guiEvent(String("CONNECTING;SSID=") + ssid);
 
   if (pass.length() == 0) {
     WiFi.begin(ssid.c_str());
@@ -150,10 +182,15 @@ bool connectToWiFi(const String& ssid, const String& pass) {
     Serial.println(WiFi.SSID());
     Serial.print("IP address: ");
     Serial.println(WiFi.localIP());
+    guiEvent(String("OK;IP=") + WiFi.localIP().toString() + String(";URL=") + ipUrl() + String(";STREAM=") + streamUrl() + String(";MDNS=") + mdnsUrl());
     return true;
   }
 
+  wl_status_t status = WiFi.status();
   Serial.println("WiFi connection failed");
+  Serial.print("WiFi status: ");
+  Serial.println(wifiStatusName(status));
+  guiEvent(String("FAIL;STATUS=") + wifiStatusName(status));
   return false;
 }
 
@@ -181,11 +218,13 @@ bool waitForCliCredentials() {
       Serial.println(savedSsid.length() ? savedSsid : "<empty>");
       Serial.print("Saved password: ");
       Serial.println(maskPassword(savedPass));
+      guiEvent(String("STATUS;SAVED_SSID=") + (savedSsid.length() ? savedSsid : String("<empty>")) + String(";WIFI=") + wifiStatusName(WiFi.status()));
       continue;
     }
 
     if (line.equalsIgnoreCase("RESET")) {
       Serial.println("Erasing saved WiFi settings and restarting");
+      guiEvent("RESETTING");
       clearWiFiSettings();
       delay(1000);
       ESP.restart();
@@ -195,6 +234,7 @@ bool waitForCliCredentials() {
     String pass;
     if (!parseCredentialsLine(line, ssid, pass)) {
       Serial.println("Bad format. Use: SSID;PASSWORD");
+      guiEvent("ERROR;CODE=BAD_FORMAT;FORMAT=SSID;PASSWORD");
       continue;
     }
 
@@ -297,8 +337,10 @@ void startCameraServer() {
     httpd_register_uri_handler(camera_httpd, &index_uri);
     httpd_register_uri_handler(camera_httpd, &stream_uri);
     Serial.println("HTTP camera server started");
+    guiEvent(String("SERVER;URL=") + ipUrl() + String(";STREAM=") + streamUrl());
   } else {
     Serial.println("HTTP camera server start failed");
+    guiEvent("ERROR;CODE=HTTP_SERVER_FAILED");
   }
 }
 
@@ -308,8 +350,10 @@ void startMDNS() {
     Serial.print("mDNS started: http://");
     Serial.print(MDNS_NAME);
     Serial.println(".local/");
+    guiEvent(String("MDNS;URL=") + mdnsUrl());
   } else {
     Serial.println("mDNS failed. Use numeric IP address.");
+    guiEvent("MDNS;STATUS=FAILED");
   }
 }
 
@@ -349,10 +393,12 @@ void initCamera() {
   esp_err_t err = esp_camera_init(&config);
   if (err != ESP_OK) {
     Serial.printf("Camera init failed with error 0x%x\n", err);
+    guiEvent(String("ERROR;CODE=CAMERA_INIT_FAILED;ESP_ERR=0x") + String((uint32_t)err, HEX));
     delay(3000);
     ESP.restart();
   }
   Serial.println("Camera initialized");
+  guiEvent("CAMERA;STATUS=OK");
 }
 
 void setupWiFi() {
@@ -361,8 +407,10 @@ void setupWiFi() {
   if (savedSsid.length() > 0) {
     Serial.print("Saved SSID found: ");
     Serial.println(savedSsid);
+    guiEvent(String("SAVED_FOUND;SSID=") + savedSsid);
     if (connectToWiFi(savedSsid, savedPass)) return;
     Serial.println("Saved WiFi did not connect. Send new credentials: SSID;PASSWORD");
+    guiEvent("READY;FORMAT=SSID;PASSWORD;REASON=SAVED_CONNECT_FAILED");
   }
 
   waitForCliCredentials();
@@ -377,6 +425,7 @@ void setup() {
 
   Serial.println();
   Serial.println("ESP32-CAM UART CLI Config Stream");
+  guiEvent("BOOT;NAME=ESP32-CAM_UART_CLI;BAUD=115200");
 
   setupWiFi();
   startMDNS();
@@ -389,7 +438,8 @@ void setup() {
   Serial.println("Camera stream:");
   Serial.println(streamUrl());
   Serial.println("mDNS page:");
-  Serial.println(String("http://") + MDNS_NAME + String(".local/"));
+  Serial.println(mdnsUrl());
+  guiEvent(String("READY_STREAM;URL=") + ipUrl() + String(";STREAM=") + streamUrl() + String(";MDNS=") + mdnsUrl());
 }
 
 void loop() {
