@@ -28,8 +28,8 @@ class Esp32CamUartGui:
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
         self.root.title("ESP32-CAM UART Wi-Fi GUI")
-        self.root.geometry("760x560")
-        self.root.minsize(720, 500)
+        self.root.geometry("820x580")
+        self.root.minsize(760, 520)
 
         self.serial_port = None
         self.reader_thread = None
@@ -48,6 +48,9 @@ class Esp32CamUartGui:
         self.url_var = tk.StringVar(value="-")
         self.stream_var = tk.StringVar(value="-")
         self.show_password_var = tk.BooleanVar(value=False)
+
+        self.entry_context_menu = tk.Menu(self.root, tearoff=0)
+        self.context_entry = None
 
         self._build_ui()
         self.refresh_ports()
@@ -83,17 +86,22 @@ class Esp32CamUartGui:
         wifi.columnconfigure(1, weight=1)
 
         ttk.Label(wifi, text="SSID:").grid(row=0, column=0, padx=6, pady=8, sticky="w")
-        ttk.Entry(wifi, textvariable=self.ssid_var).grid(row=0, column=1, padx=6, pady=8, sticky="ew")
+        self.ssid_entry = ttk.Entry(wifi, textvariable=self.ssid_var)
+        self.ssid_entry.grid(row=0, column=1, padx=6, pady=8, sticky="ew")
+        self.add_entry_paste_support(self.ssid_entry)
+        ttk.Button(wifi, text="Paste", command=lambda: self.paste_into_entry(self.ssid_entry)).grid(row=0, column=2, padx=4, pady=8)
 
         ttk.Label(wifi, text="Password:").grid(row=1, column=0, padx=6, pady=8, sticky="w")
         self.password_entry = ttk.Entry(wifi, textvariable=self.password_var, show="*")
         self.password_entry.grid(row=1, column=1, padx=6, pady=8, sticky="ew")
-        ttk.Checkbutton(wifi, text="Show", variable=self.show_password_var, command=self.toggle_password).grid(row=1, column=2, padx=6, pady=8)
+        self.add_entry_paste_support(self.password_entry)
+        ttk.Button(wifi, text="Paste", command=lambda: self.paste_into_entry(self.password_entry)).grid(row=1, column=2, padx=4, pady=8)
+        ttk.Checkbutton(wifi, text="Show", variable=self.show_password_var, command=self.toggle_password).grid(row=1, column=3, padx=6, pady=8)
 
         self.send_button = ttk.Button(wifi, text="Send SSID;PASSWORD", command=self.send_credentials, state="disabled")
-        self.send_button.grid(row=0, column=2, padx=6, pady=8, sticky="ew")
+        self.send_button.grid(row=0, column=3, padx=6, pady=8, sticky="ew")
         self.reset_button = ttk.Button(wifi, text="RESET saved Wi-Fi", command=self.send_reset, state="disabled")
-        self.reset_button.grid(row=0, column=3, rowspan=2, padx=6, pady=8, sticky="ns")
+        self.reset_button.grid(row=0, column=4, rowspan=2, padx=6, pady=8, sticky="ns")
 
         result = ttk.LabelFrame(root, text="3. ESP32-CAM result")
         result.grid(row=2, column=0, padx=10, pady=8, sticky="ew")
@@ -129,6 +137,52 @@ class Esp32CamUartGui:
         scrollbar = ttk.Scrollbar(log_frame, orient="vertical", command=self.log_text.yview)
         scrollbar.grid(row=0, column=1, sticky="ns")
         self.log_text.configure(yscrollcommand=scrollbar.set)
+
+    def add_entry_paste_support(self, entry: ttk.Entry) -> None:
+        entry.bind("<Control-v>", lambda event: self.paste_event(event, entry))
+        entry.bind("<Control-V>", lambda event: self.paste_event(event, entry))
+        entry.bind("<Shift-Insert>", lambda event: self.paste_event(event, entry))
+        entry.bind("<Button-3>", lambda event: self.show_entry_context_menu(event, entry))
+
+    def paste_event(self, event: tk.Event, entry: ttk.Entry) -> str:
+        self.paste_into_entry(entry)
+        return "break"
+
+    def paste_into_entry(self, entry: ttk.Entry) -> None:
+        try:
+            text = self.root.clipboard_get()
+        except tk.TclError:
+            self.status_var.set("Clipboard is empty")
+            return
+        if text is None:
+            return
+        text = str(text).replace("\r", "").replace("\n", "").strip()
+        if not text:
+            return
+        try:
+            first = entry.index("sel.first")
+            last = entry.index("sel.last")
+            entry.delete(first, last)
+        except tk.TclError:
+            pass
+        entry.insert(entry.index("insert"), text)
+        entry.focus_set()
+
+    def show_entry_context_menu(self, event: tk.Event, entry: ttk.Entry) -> str:
+        self.context_entry = entry
+        self.entry_context_menu.delete(0, "end")
+        self.entry_context_menu.add_command(label="Paste", command=lambda: self.paste_into_entry(entry))
+        self.entry_context_menu.add_command(label="Copy", command=lambda: entry.event_generate("<<Copy>>"))
+        self.entry_context_menu.add_command(label="Cut", command=lambda: entry.event_generate("<<Cut>>"))
+        self.entry_context_menu.add_separator()
+        self.entry_context_menu.add_command(label="Select all", command=lambda: self.select_all_entry(entry))
+        self.entry_context_menu.tk_popup(event.x_root, event.y_root)
+        return "break"
+
+    def select_all_entry(self, entry: ttk.Entry) -> None:
+        entry.focus_set()
+        entry.selection_range(0, "end")
+        entry.icursor("end")
 
     def refresh_ports(self) -> None:
         if list_ports is None:
