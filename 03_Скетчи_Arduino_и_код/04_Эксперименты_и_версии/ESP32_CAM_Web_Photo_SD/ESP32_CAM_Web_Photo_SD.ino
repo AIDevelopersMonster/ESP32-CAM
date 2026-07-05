@@ -1,3 +1,4 @@
+#include "Arduino.h"
 #include "esp_camera.h"
 #include "FS.h"
 #include "SD_MMC.h"
@@ -6,6 +7,10 @@
 
 #include "soc/soc.h"
 #include "soc/rtc_cntl_reg.h"
+
+#ifndef ESP_ARDUINO_VERSION_MAJOR
+#define ESP_ARDUINO_VERSION_MAJOR 2
+#endif
 
 // ============================================================
 // ESP32-CAM: Take Photo from Web Button and Save to MicroSD
@@ -17,6 +22,7 @@
 // - Save JPG files to MicroSD
 // - Web gallery
 // - View and delete saved photos
+// - Web flashlight on/off and brightness slider
 //
 // Open in browser: http://192.168.4.1
 // ============================================================
@@ -54,6 +60,65 @@ WebServer server(80);
 #define PCLK_GPIO_NUM     22
 
 // ----------------------------
+// Flash LED settings
+// ----------------------------
+// On common AI Thinker ESP32-CAM boards the white flash LED is controlled by GPIO4.
+// GPIO4 is also related to SD DATA1 on many boards. The sketch mounts MicroSD in
+// 1-bit mode, so this pin can be used for the flash LED.
+#define FLASH_LED_GPIO       4
+#define FLASH_PWM_CHANNEL    7
+#define FLASH_PWM_FREQ       5000
+#define FLASH_PWM_RESOLUTION 8
+
+int flashBrightness = 0;
+bool flashPwmReady = false;
+
+// ----------------------------
+// Flash helpers
+// ----------------------------
+void writeFlashPwm(uint8_t value) {
+  if (!flashPwmReady) {
+    digitalWrite(FLASH_LED_GPIO, value > 0 ? HIGH : LOW);
+    return;
+  }
+
+#if ESP_ARDUINO_VERSION_MAJOR >= 3
+  ledcWrite(FLASH_LED_GPIO, value);
+#else
+  ledcWrite(FLASH_PWM_CHANNEL, value);
+#endif
+}
+
+void setFlashBrightness(int value) {
+  if (value < 0) {
+    value = 0;
+  }
+
+  if (value > 255) {
+    value = 255;
+  }
+
+  flashBrightness = value;
+  writeFlashPwm((uint8_t)flashBrightness);
+}
+
+void initFlash() {
+  pinMode(FLASH_LED_GPIO, OUTPUT);
+  digitalWrite(FLASH_LED_GPIO, LOW);
+
+#if ESP_ARDUINO_VERSION_MAJOR >= 3
+  flashPwmReady = ledcAttach(FLASH_LED_GPIO, FLASH_PWM_FREQ, FLASH_PWM_RESOLUTION);
+#else
+  ledcSetup(FLASH_PWM_CHANNEL, FLASH_PWM_FREQ, FLASH_PWM_RESOLUTION);
+  ledcAttachPin(FLASH_LED_GPIO, FLASH_PWM_CHANNEL);
+  flashPwmReady = true;
+#endif
+
+  setFlashBrightness(0);
+  Serial.println("Flash LED init OK");
+}
+
+// ----------------------------
 // HTML helpers
 // ----------------------------
 String htmlHeader(const String& title) {
@@ -67,10 +132,12 @@ String htmlHeader(const String& title) {
   html += ".card{background:white;padding:16px;border-radius:12px;max-width:780px;margin:auto;box-shadow:0 2px 8px #ccc;}";
   html += "button,.btn{display:inline-block;background:#1565c0;color:white;padding:12px 18px;margin:6px 4px;border:0;border-radius:8px;text-decoration:none;font-size:16px;cursor:pointer;}";
   html += ".danger{background:#c62828;}";
-  html += ".photo{border:1px solid #ccc;border-radius:8px;margin:10px 0;padding:10px;background:#fafafa;}";
+  html += ".light{background:#f57c00;}";
+  html += ".photo,.panel{border:1px solid #ccc;border-radius:8px;margin:10px 0;padding:10px;background:#fafafa;}";
   html += "img{max-width:100%;height:auto;border-radius:8px;}";
   html += "small{color:#666;}";
   html += "code{background:#eee;padding:2px 4px;border-radius:4px;}";
+  html += "input[type=range]{width:100%;max-width:360px;}";
   html += "</style></head><body><div class='card'>";
   html += "<h2>" + title + "</h2>";
 
@@ -79,6 +146,36 @@ String htmlHeader(const String& title) {
 
 String htmlFooter() {
   return "</div></body></html>";
+}
+
+String flashControlsHtml() {
+  String html;
+
+  html += "<div class='panel'>";
+  html += "<h3>Фонарик</h3>";
+  html += "<p>Яркость: <b><span id='flashValue'>" + String(flashBrightness) + "</span></b> / 255</p>";
+  html += "<input id='flashSlider' type='range' min='0' max='255' value='" + String(flashBrightness) + "' oninput='setFlash(this.value)'>";
+  html += "<p>";
+  html += "<button class='light' type='button' onclick='setFlash(180)'>Включить</button>";
+  html += "<button type='button' onclick='setFlash(0)'>Выключить</button>";
+  html += "</p>";
+  html += "<small>На AI Thinker ESP32-CAM фонарик обычно сидит на GPIO4. MicroSD используется в 1-bit mode.</small>";
+  html += "</div>";
+  html += "<script>";
+  html += "function setFlash(v){";
+  html += "v=parseInt(v);";
+  html += "if(isNaN(v)){v=0;}";
+  html += "if(v<0){v=0;}";
+  html += "if(v>255){v=255;}";
+  html += "var s=document.getElementById('flashSlider');";
+  html += "var t=document.getElementById('flashValue');";
+  html += "if(s){s.value=v;}";
+  html += "if(t){t.textContent=v;}";
+  html += "fetch('/flash?value='+v).catch(function(e){});";
+  html += "}";
+  html += "</script>";
+
+  return html;
 }
 
 String formatBytes(size_t bytes) {
@@ -262,6 +359,7 @@ void handleRoot() {
   String html = htmlHeader("ESP32-CAM Photo to MicroSD");
 
   html += "<p>Нажмите кнопку в браузере — камера сделает фото и сохранит JPG на MicroSD.</p>";
+  html += flashControlsHtml();
   html += "<form method='POST' action='/capture'>";
   html += "<button type='submit'>Сделать фото</button>";
   html += "</form>";
@@ -280,6 +378,7 @@ void handleCapture() {
   if (path == "") {
     String html = htmlHeader("Ошибка");
     html += "<p>Фото не удалось сделать или записать на MicroSD.</p>";
+    html += flashControlsHtml();
     html += "<a class='btn' href='/'>Назад</a>";
     html += htmlFooter();
 
@@ -291,6 +390,7 @@ void handleCapture() {
 
   html += "<p>Сохранено: <b>" + path + "</b></p>";
   html += "<p><img src='/view?name=" + path + "'></p>";
+  html += flashControlsHtml();
   html += "<a class='btn' href='/gallery'>Галерея</a>";
   html += "<a class='btn' href='/'>На главную</a>";
 
@@ -396,6 +496,15 @@ void handleDelete() {
   }
 }
 
+void handleFlash() {
+  if (server.hasArg("value")) {
+    setFlashBrightness(server.arg("value").toInt());
+  }
+
+  String json = "{\"flash\":" + String(flashBrightness) + "}";
+  server.send(200, "application/json", json);
+}
+
 void handleNotFound() {
   server.send(404, "text/plain", "Not found");
 }
@@ -409,6 +518,8 @@ void setup() {
   Serial.begin(115200);
   Serial.println();
   Serial.println("ESP32-CAM Web Photo to MicroSD");
+
+  initFlash();
 
   if (!initCamera()) {
     Serial.println("Camera failed. Halt.");
@@ -443,6 +554,7 @@ void setup() {
   server.on("/gallery", HTTP_GET, handleGallery);
   server.on("/view", HTTP_GET, handleView);
   server.on("/delete", HTTP_POST, handleDelete);
+  server.on("/flash", HTTP_GET, handleFlash);
   server.onNotFound(handleNotFound);
 
   server.begin();
